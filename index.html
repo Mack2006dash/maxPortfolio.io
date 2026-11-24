@@ -423,8 +423,23 @@ rows.innerHTML=P.map(project=>{
 rows.querySelectorAll('.project-tile[data-src]').forEach(tile=>tile.onclick=()=>openMedia(tile.dataset.src,tile.dataset.l,'image',tile));
 const reelFiles=['https://res.cloudinary.com/i6d0yzln/video/upload/v1795499462/reel-01-comp-1_3.mp4','https://res.cloudinary.com/i6d0yzln/video/upload/v1795499461/reel-02-max-render-dum4l3gjm-j.mp4','https://res.cloudinary.com/i6d0yzln/video/upload/v1795499461/reel-03-max-render-1781199430.mp4','https://res.cloudinary.com/i6d0yzln/video/upload/v1795499466/reel-04-comp.mp4'];
 for(let i=reelFiles.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[reelFiles[i],reelFiles[j]]=[reelFiles[j],reelFiles[i]]}
-const workReelVideos=[...document.querySelectorAll('#workReels video.local-reel')];workReelVideos.forEach((video,index)=>{video.dataset.src=reelFiles[index];video.muted=true;video.loop=true;video.playsInline=true});
-const workReelObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{const video=entry.target;if(entry.isIntersecting){if(!video.src){video.src=video.dataset.src;video.load()}if(lowEndMode)workReelVideos.forEach(v=>{if(v!==video)v.pause()});video.play().catch(()=>{})}else video.pause()}),{rootMargin:'80px 0px',threshold:.12});workReelVideos.forEach(video=>workReelObserver.observe(video));
+const workReelVideos=[...document.querySelectorAll('#workReels video.local-reel')];
+workReelVideos.forEach((video,index)=>{
+  video.muted=true;
+  video.defaultMuted=true;
+  video.loop=true;
+  video.playsInline=true;
+  video.setAttribute('muted','');
+  video.setAttribute('playsinline','');
+  video.preload='auto';
+  video.src=reelFiles[index];
+  video.load();
+});
+const workReelObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{
+  const video=entry.target;
+  if(entry.isIntersecting){video.play().catch(()=>{})}else{video.pause()}
+}),{rootMargin:'80px 0px',threshold:.05});
+workReelVideos.forEach(video=>workReelObserver.observe(video));
 /* Subtle app-switcher depth as project cards pass the viewport center. */
 const projectDeckCards=[...rows.querySelectorAll('.project-card')];let deckFrame=0;
 function updateProjectDeck(){deckFrame=0;if(matchMedia('(prefers-reduced-motion: reduce)').matches)return;const height=innerHeight||1;projectDeckCards.forEach(card=>{const box=card.getBoundingClientRect(),distance=Math.max(-1,Math.min(1,(box.top+box.height*.5-height*.5)/(height*.72))),depth=Math.abs(distance);card.style.setProperty('--deck-y',`${(distance*34).toFixed(1)}px`);card.style.setProperty('--deck-scale',(1-depth*.065).toFixed(3));card.style.setProperty('--deck-opacity',(1-depth*.2).toFixed(3));card.style.setProperty('--deck-tilt',`${(lowEndMode?0:distance*3).toFixed(2)}deg`)})}

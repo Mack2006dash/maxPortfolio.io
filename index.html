@@ -320,6 +320,9 @@ h2{font-size:clamp(1.6rem,4vw,2.6rem);letter-spacing:-.02em;margin:0 0 34px}
 @media (max-width:760px){.hero::before{width:calc(100% + 8vw);left:-4vw;background:radial-gradient(ellipse 90% 75% at 40% 50%,rgba(0,4,1,.88),rgba(0,4,1,.6) 60%,rgba(0,4,1,0) 85%)}}
 
 #tiltBtn{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 16px);transform:translateX(-50%);z-index:15;padding:10px 18px;border:1px solid #5dff0099;border-radius:999px;background:#030b05eb;color:#fff;font:inherit;font-size:.85rem;backdrop-filter:blur(8px);box-shadow:0 8px 28px #000a}
+
+/* ---- pixelated low-res 3D render: canvas is upscaled with hard pixels, old bloom canvas disabled ---- */
+#bg{image-rendering:pixelated}#bgBloom{display:none!important}
 </style>
 </head>
 <body>
@@ -384,9 +387,6 @@ h2{font-size:clamp(1.6rem,4vw,2.6rem);letter-spacing:-.02em;margin:0 0 34px}
 <div id="pj" role="dialog" aria-modal="true" aria-label="Project details" aria-hidden="true" inert tabindex="-1"><button class="btn x" id="cl" type="button">Close</button><div class="w" id="pc"></div></div>
 <div id="renderGallery" role="dialog" aria-modal="true" aria-labelledby="renderGalleryTitle" aria-hidden="true" inert tabindex="-1"><div class="render-gallery-head"><div><div class="render-gallery-kicker">Spider-Man · Cinematic</div><h2 class="render-gallery-title" id="renderGalleryTitle">Render collection</h2></div><p class="render-gallery-note">Skin, eye, and lighting studies · 07 images</p></div><button class="btn" id="renderGalleryClose" type="button" aria-label="Close render collection">Close</button><div class="render-gallery-board"><div class="render-gallery-grid render-wall" id="renderGalleryGrid" aria-label="All images in the render collection"></div></div></div>
 <div id="lb" role="dialog" aria-modal="true" aria-label="Media viewer" aria-hidden="true" inert tabindex="-1"><button class="btn" id="lbClose" type="button" aria-label="Close media viewer">Close</button><button class="lb-nav" id="lbPrev" type="button" aria-label="Previous image" hidden>‹</button><button class="lb-nav" id="lbNext" type="button" aria-label="Next image" hidden>›</button><div class="lb-content" id="lbi"></div></div>
-
-
-
 
 <script>
 const P=[
@@ -511,7 +511,7 @@ let gyroOn=false;
 window.__three.then(()=>{
 try{
 const cv=$('#bg'),R=new THREE.WebGLRenderer({canvas:cv,antialias:!lowEndMode,alpha:true,powerPreference:lowEndMode?'low-power':'high-performance'});
-R.setPixelRatio(Math.min(devicePixelRatio,lowEndMode?1:(matchMedia('(pointer:fine)').matches?1.35:1.1)));
+R.setPixelRatio(1);
 R.outputEncoding=THREE.sRGBEncoding;
 R.toneMapping=THREE.ACESFilmicToneMapping;
 R.toneMappingExposure=1.05;
@@ -705,9 +705,37 @@ function loadDefaultModel(){
   if(location.protocol==='file:'){status.textContent='Preparing the crystal model...';const dataScript=document.createElement('script');dataScript.src='green-crystal-head-data.js';dataScript.onload=async()=>{try{if(typeof DecompressionStream!=='function')throw new Error('This browser cannot decode the compressed local model.');const binary=atob(window.greenCrystalModelGzipBase64||'');window.greenCrystalModelGzipBase64='';const compressed=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)compressed[i]=binary.charCodeAt(i);const buffer=await new Response(new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();loader.parse(buffer,'',onLoad,onError)}catch(error){onError(error)}};dataScript.onerror=onError;document.head.appendChild(dataScript)}else (window.__glb||fetch(suppliedModel).then(r=>r.arrayBuffer())).then(buf=>loader.parse(buf,'',onLoad,onError)).catch(onError);
 }
 loadDefaultModel();
-function rs(){R.setSize(innerWidth,innerHeight,false);bloomComposer?.setSize(innerWidth,innerHeight);if(bloomComposer?.passes?.[2]?.uniforms?.resolution)bloomComposer.passes[2].uniforms.resolution.value.set(innerWidth,innerHeight);C.aspect=innerWidth/innerHeight;C.updateProjectionMatrix()}
+/* ---- low-res render target + mouse-reactive pixel/glow pass ---- */
+const RT=new THREE.WebGLRenderTarget(2,2,{minFilter:THREE.NearestFilter,magFilter:THREE.NearestFilter,format:THREE.RGBAFormat});
+RT.texture.encoding=THREE.sRGBEncoding;
+const PX={mouse:new THREE.Vector2(.5,.5),smooth:new THREE.Vector2(.5,.5),energy:0};
+const pixU={t:{value:RT.texture},res:{value:new THREE.Vector2(2,2)},mouse:{value:PX.smooth},energy:{value:0},time:{value:0}};
+const postScene=new THREE.Scene(),postCam=new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),new THREE.ShaderMaterial({uniforms:pixU,transparent:true,depthTest:false,depthWrite:false,blending:THREE.NoBlending,
+vertexShader:'varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position.xy,0.,1.);}',
+fragmentShader:`uniform sampler2D t;uniform vec2 res,mouse;uniform float energy,time;varying vec2 vUv;
+float h(vec2 p){return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453);}
+void main(){
+  float asp=res.x/res.y;vec2 d=(vUv-mouse)*vec2(asp,1.);
+  float near=exp(-dot(d,d)*10.);
+  float ripple=sin(length(d)*40.-time*6.)*.5+.5;
+  float cell=max(1.,floor(mix(3.,1.,near)+energy*near*5.*ripple+.5));
+  vec2 g=res/cell;vec2 cellId=floor(vUv*g);vec2 uv=(cellId+.5)/g;
+  vec4 c=texture2D(t,uv);
+  c.rgb=floor(c.rgb*8.+.5+(h(cellId)-.5)*.6)/8.;
+  vec2 gg=res/6.;vec2 gu=(floor(vUv*gg)+.5)/gg;vec3 acc=vec3(0.);
+  for(int i=0;i<8;i++){float a=float(i)*.7853982;vec2 o=vec2(cos(a),sin(a))/gg;
+    acc+=max(texture2D(t,gu+o*1.5).rgb-.35,0.)+max(texture2D(t,gu+o*3.).rgb-.35,0.)*.6;}
+  acc/=8.;
+  vec3 glow=acc*vec3(.6,1.4,.4)*(1.5+near*1.2+energy*2.)*(.92+.08*sin(time*2.));
+  glow=floor(glow*6.+.5)/6.;
+  float a=clamp(max(c.a,dot(glow,vec3(.4))),0.,1.);
+  gl_FragColor=vec4(min(c.rgb+glow,vec3(a)),a);
+}`})));
+function sizePixelTarget(){const h=Math.round(Math.min(innerHeight,lowEndMode?300:400)),w=Math.max(2,Math.round(h*innerWidth/Math.max(1,innerHeight)));RT.setSize(w,Math.max(2,h));pixU.res.value.set(w,Math.max(2,h))}
+function rs(){R.setSize(innerWidth,innerHeight,false);sizePixelTarget();bloomComposer?.setSize(innerWidth,innerHeight);if(bloomComposer?.passes?.[2]?.uniforms?.resolution)bloomComposer.passes[2].uniforms.resolution.value.set(innerWidth,innerHeight);C.aspect=innerWidth/innerHeight;C.updateProjectionMatrix()}
 addEventListener('resize',rs);rs();
-const clk=new THREE.Clock();let frameInterval=lowEndMode?1000/30-4:1000/70,lastFrame=performance.now(),renderLoopActive=false,renderFrameId=0,sceneHidden=false,perfLast=0,perfSum=0,perfN=0,warm=0,resScale=1,bloomStarted=false;
+const clk=new THREE.Clock();let frameInterval=lowEndMode?1000/30-4:1000/70,lastFrame=performance.now(),renderLoopActive=false,renderFrameId=0,sceneHidden=false,perfLast=0,perfSum=0,perfN=0,warm=0,resScale=1,bloomStarted=true;
 function tuneQuality(avg){if(!modelRoot)return;if(++warm<3)return;
   if(avg>24){if(bloomComposer){bloomComposer=null;bloomCanvas.style.display='none';bloomStarted=true;return}
     if(!lowEndMode){lowEndMode=true;document.documentElement.classList.add('low-end');frameInterval=1000/30-4;R.setPixelRatio(1);pg.setDrawRange(0,180);rs();return}
@@ -732,7 +760,9 @@ const radius=modelRoot?Math.max(horizontalFitDistance,depthClearance):7;
 C.position.set(0,0,radius);C.lookAt(0,0,0);C.updateMatrixWorld(true);S.updateMatrixWorld(true);pts.rotation.y=t*.02+mx*.15;pts.rotation.x=my*.1;
 const homeFadeProgress=Math.min(1,Math.max(0,scrollY/Math.max(1,innerHeight*.72))),homeFade=homeFadeProgress*homeFadeProgress*(3-2*homeFadeProgress),homeAlpha=1-homeFade;
 grp.visible=homeAlpha>.005;cv.style.opacity=homeAlpha.toFixed(3);bloomCanvas.style.opacity=(.7*homeAlpha).toFixed(3);
-R.render(S,C);bloomComposer?.render()}
+PX.mouse.set(mx+.5,.5-my);PX.energy+=(Math.min(1,PX.mouse.distanceTo(PX.smooth)*10)-PX.energy)*.15;PX.smooth.lerp(PX.mouse,.2);
+pixU.energy.value=PX.energy;pixU.time.value=t;
+R.setRenderTarget(RT);R.render(S,C);R.setRenderTarget(null);R.render(postScene,postCam)}
 restartRenderLoop=startRenderLoop;document.addEventListener('visibilitychange',()=>{if(document.hidden){renderLoopActive=false;if(renderFrameId)cancelAnimationFrame(renderFrameId);renderFrameId=0}else startRenderLoop()});startRenderLoop();
 }catch(e){document.getElementById('bg').remove()}
 }).catch(()=>{document.getElementById('bg')?.remove()});
